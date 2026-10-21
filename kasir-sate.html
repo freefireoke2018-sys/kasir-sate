@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sate Track AI - Kasir Suara Mandiri</title>
+    <style>
+        :root {
+            --primary: #d35400;
+            --dark: #2c3e50;
+            --light: #ecf0f1;
+            --success: #27ae60;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
+        body { background-color: var(--light); color: var(--dark); padding: 15px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: var(--primary); margin-bottom: 5px; font-size: 24px; }
+        p.subtitle { text-align: center; font-size: 12px; color: #7f8c8d; margin-bottom: 20px; }
+        
+        .status-box { background: #f8f9fa; padding: 12px; border-radius: 8px; text-align: center; margin-bottom: 15px; border: 1px solid #e2e8f0; }
+        .btn-mic { width: 100%; padding: 15px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; margin-bottom: 20px; transition: 0.2s; }
+        .btn-mic.listening { background: #c0392b; animation: pulse 1.5s infinite; }
+        
+        .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+        .card { background: #fdfefe; padding: 15px; border-radius: 8px; border-left: 5px solid var(--primary); box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .card.profit { border-left-color: var(--success); }
+        .card h3 { font-size: 12px; color: #7f8c8d; text-transform: uppercase; }
+        .card p { font-size: 20px; font-weight: bold; margin-top: 5px; }
+
+        .log-section { margin-top: 15px; }
+        .log-section h2 { font-size: 16px; margin-bottom: 10px; border-bottom: 2px solid var(--light); padding-bottom: 5px; }
+        .log-list { max-height: 200px; overflow-y: auto; list-style: none; }
+        .log-item { padding: 10px; border-bottom: 1px solid var(--light); font-size: 14px; display: flex; justify-content: space-between; }
+        .log-item span.time { color: #95a5a6; font-size: 12px; }
+        
+        .btn-reset { width: 100%; padding: 8px; background: #95a5a6; color: white; border: none; border-radius: 5px; margin-top: 15px; cursor: pointer; font-size: 12px; }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(0.98); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🍢 Sate Track AI</h1>
+    <p class="subtitle">Sistem Kasir Suara Otomatis - Khusus Warung Sate</p>
+
+    <!-- Pemicu Mikrofon -->
+    <button id="micButton" class="btn-mic" onclick="toggleListening()">🎙️ AKTIFKAN MIC KASIR</button>
+    
+    <div class="status-box">
+        <strong>Status Suara:</strong> <span id="statusText">Mikrofon Mati</span><br>
+        <em style="font-size: 12px; color: #7f8c8d;" id="transcriptText">Menunggu pesanan lisan...</em>
+    </div>
+
+    <!-- Grafik Keuangan Hasil Olahan Otomatis -->
+    <div class="dashboard">
+        <div class="card">
+            <h3>Total Omzet</h3>
+            <p id="totalOmzet">Rp 0</p>
+        </div>
+        <div class="card profit">
+            <h3>Untung Bersih (Margin)</h3>
+            <p id="totalUntung" style="color: var(--success);">Rp 0</p>
+        </div>
+    </div>
+
+    <!-- Rekam Jejak Aktivitas Transaksi Harian -->
+    <div class="log-section">
+        <h2>Riwayat Penjualan Hari Ini</h2>
+        <ul id="logList" class="log-list">
+            <!-- Data Transaksi Masuk Sini -->
+        </ul>
+    </div>
+
+    <button class="btn-reset" onclick="resetData()">Clear Data/Mulai Hari Baru</button>
+</div>
+
+<script>
+    // BASIS DATA HARGA DAN HPP WARUNG SATE ORANG TUA (Bisa diganti angkanya di sini)
+    const MENU = {
+        'sate ayam': { harga: 15000, hpp: 9000 },
+        'sate kambing': { harga: 25000, hpp: 15000 },
+        'lontong': { harga: 4000, hpp: 1500 },
+        'es teh': { harga: 4000, hpp: 1500 },
+        'teh': { harga: 4000, hpp: 1500 }
+    };
+
+    // Konversi Angka Kata ke Digit untuk Otak AI JavaScript
+    const ANGKA_KATA = {
+        'satu': 1, 'dua': 2, 'tiga': 3, 'empat': 4, 'lima': 5,
+        'enam': 6, 'tujuh': 7, 'delapan': 8, 'sembilan': 9, 'sepuluh': 10
+    };
+
+    let omzet = parseInt(localStorage.getItem('sate_omzet')) || 0;
+    let untung = parseInt(localStorage.getItem('sate_untung')) || 0;
+    let riwayat = JSON.parse(localStorage.getItem('sate_riwayat')) || [];
+
+    let recognition;
+    let isListening = false;
+
+    // Inisialisasi Fitur Deteksi Suara Bawaan HP/Browser (Web Speech API)
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.continuous = true; // Mic menyala terus mendengarkan suara lapangan
+        recognition.interimResults = false;
+        recognition.lang = 'id-ID'; // Mengunci radar deteksi ke Bahasa Indonesia murni
+
+        recognition.onstart = () => {
+            isListening = true;
+            document.getElementById('micButton').textContent = "🛑 MATIKAN MIC KASIR";
+            document.getElementById('micButton').className = "btn-mic listening";
+            document.getElementById('statusText').textContent = "Mendengarkan Transaksi...";
+        };
+
+        recognition.onresult = (event) => {
+            const resultText = event.results[event.results.length - 1][0].transcript.toLowerCase();
+            document.getElementById('transcriptText').textContent = `"${resultText}"`;
+            prosesSuaraPesanan(resultText);
+        };
+
+        recognition.onerror = (event) => {
+            console.error("Error Mic:", event.error);
+        };
+
+        recognition.onend = () => {
+            if (isListening) recognition.start(); // Auto-restart jika mic terputus di tengah jalan
+        };
+    } else {
+        alert("Maaf, Browser HP/Laptop Anda belum mendukung fitur Voice Recognition. Gunakan Google Chrome versi terbaru.");
+    }
+
+    function toggleListening() {
+        if (!isListening) {
+            recognition.start();
+        } else {
+            isListening = false;
+            recognition.stop();
+            document.getElementById('micButton').textContent = "🎙️ AKTIFKAN MIC KASIR";
+            document.getElementById('micButton').className = "btn-mic";
+            document.getElementById('statusText').textContent = "Mikrofon Mati";
+        }
+    }
+
+    // LOGIKA INTI KASIR VOICE: Membaca Struktur Kalimat Masukan Suara
+    function prosesSuaraPesanan(text) {
+        let pesananTerdeteksi = [];
+        let totalHargaNota = 0;
+        let totalHppNota = 0;
+
+        // Cek kecocokan teks masukan suara dengan basis data menu sate
+        Object.keys(MENU).forEach(item => {
+            if (text.includes(item)) {
+                let jumlah = 1; // Default jika pembeli hanya sebut "Sate ayam" saja
+                
+                // Cari apakah ada kata angka kuantitas di depan atau belakang nama menu
+                Object.keys(ANGKA_KATA).forEach(kata => {
+                    if (text.includes(`${item} ${kata}`) || text.includes(`${kata} ${item}`) || text.includes(`${item} ${ANGKA_KATA[kata]}`)) {
+                        jumlah = ANGKA_KATA[kata];
+                    }
+                });
+
+                // Cek jika masukan angka langsung menggunakan digit nominal angka biasa
+                const regexAngka = new RegExp(`(\\d+)\\s*${item}|${item}\\s*(\\d+)`);
+                const match = text.match(regexAngka);
+                if (match) {
+                    jumlah = parseInt(match[1] || match[2]);
+                }
+
+                let hargaItem = MENU[item].harga * jumlah;
+                let hppItem = MENU[item].hpp * jumlah;
+
+                totalHargaNota += hargaItem;
+                totalHppNota += hppItem;
+                pesananTerdeteksi.push(`${jumlah} ${item}`);
+            }
+        });
+
+        // Jika transaksi valid masuk hitungan, simpan langsung ke database internal browser
+        if (pesananTerdeteksi.length > 0) {
+            let untungBersihNota = totalHargaNota - totalHppNota;
+            omzet += totalHargaNota;
+            untung += untungBersihNota;
+
+            let waktu = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+            riwayat.unshift({
+                teks: pesananTerdeteksi.join(', '),
+                total: totalHargaNota,
+                waktu: waktu
+            });
+
+            updatePapanData();
+        }
+    }
+
+    function updatePapanData() {
+        localStorage.setItem('sate_omzet', omzet);
+        localStorage.setItem('sate_untung', untung);
+        localStorage.setItem('sate_riwayat', JSON.stringify(riwayat));
+
+        document.getElementById('totalOmzet').textContent = `Rp ${omzet.toLocaleString('id-ID')}`;
+        document.getElementById('totalUntung').textContent = `Rp ${untung.toLocaleString('id-ID')}`;
+
+        const logList = document.getElementById('logList');
+        logList.innerHTML = '';
+        riwayat.forEach(data => {
+            let li = document.createElement('li');
+            li.className = 'log-item';
+            li.innerHTML = `<div><strong>${data.teks}</strong> <br><span class="time">${data.waktu} WIB</span></div> <strong>+Rp ${data.total.toLocaleString('id-ID')}</strong>`;
+            logList.appendChild(li);
+        });
+    }
+
+    function resetData() {
+        if(confirm("Apakah Anda yakin ingin menghapus pembukuan sate hari ini untuk memulai lembaran baru?")) {
+            localStorage.clear();
+            omzet = 0;
+            untung = 0;
+            riwayat = [];
+            updatePapanData();
+		 document.getElementById('transcriptText').textContent = "Menunggu pesanan lisan...";
+        }
+    }
+
+    // Tampilkan data simpanan terakhir saat aplikasi pertama kali dimuat di layar HP
+    updatePapanData();
+</script>
+</body>
+</html>
